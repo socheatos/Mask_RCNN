@@ -20,10 +20,10 @@ import tensorflow as tf
 import keras
 import keras.backend as K
 import keras.layers as KL
-import keras.engine as KE
+import tensorflow.keras.layers as KE
 import keras.models as KM
 
-from mrcnn import utils
+from mrcnn import  utils
 
 # Requires TensorFlow 1.3+ and Keras 2.0.8+.
 from distutils.version import LooseVersion
@@ -1217,7 +1217,7 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
         min_scale=config.IMAGE_MIN_SCALE,
         max_dim=config.IMAGE_MAX_DIM,
         mode=config.IMAGE_RESIZE_MODE)
-    mask = utils.resize_mask(mask, scale, padding, crop)
+    mask = utils.resize_mask(mask, image, padding, crop)
 
     # Random horizontal flips.
     # TODO: will be removed in a future update in favor of augmentation
@@ -2356,7 +2356,7 @@ class MaskRCNN():
         # Work-around for Windows: Keras fails on Windows when using
         # multiprocessing workers. See discussion here:
         # https://github.com/matterport/Mask_RCNN/issues/13#issuecomment-353124009
-        if os.name is 'nt':
+        if os.name == 'nt':
             workers = 0
         else:
             workers = multiprocessing.cpu_count()
@@ -2370,7 +2370,7 @@ class MaskRCNN():
             validation_data=val_generator,
             validation_steps=self.config.VALIDATION_STEPS,
             max_queue_size=100,
-            workers=workers,
+            workers=1,
             use_multiprocessing=True,
         )
         self.epoch = max(self.epoch, epochs)

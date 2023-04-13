@@ -21,7 +21,7 @@ from matplotlib.patches import Polygon
 import IPython.display
 
 # Root directory of the project
-ROOT_DIR = os.path.abspath("../")
+ROOT_DIR = os.path.abspath("../../models/maskrcnn")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
@@ -72,6 +72,8 @@ def random_colors(N, bright=True):
 def apply_mask(image, mask, color, alpha=0.5):
     """Apply the given mask to the image.
     """
+    if (image.shape[0]!=mask.shape[0]) or (image.shape[1] != mask.shape[1]):  
+      mask = utils.resize_mask(mask,image,padding=[(0,0),(0,0),(0,0)])
     for c in range(3):
         image[:, :, c] = np.where(mask == 1,
                                   image[:, :, c] *
@@ -99,6 +101,12 @@ def display_instances(image, boxes, masks, class_ids, class_names,
     """
     # Number of instances
     N = boxes.shape[0]
+   
+    
+    if (image.shape[0]!=masks.shape[0]) or (image.shape[1] != masks.shape[1]):
+      masks = utils.resize_mask(masks,image,padding=[(0,0),(0,0),(0,0)])
+      
+
     if not N:
         print("\n*** No instances to display *** \n")
     else:
@@ -144,7 +152,7 @@ def display_instances(image, boxes, masks, class_ids, class_names,
         else:
             caption = captions[i]
         ax.text(x1, y1 + 8, caption,
-                color='w', size=11, backgroundcolor="none")
+                color='w', size=11, backgroundcolor="b")
 
         # Mask
         mask = masks[:, :, i]
