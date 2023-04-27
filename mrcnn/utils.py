@@ -305,14 +305,14 @@ class Dataset(object):
         # Build (or rebuild) everything else from the info dicts.
         self.num_classes = len(self.class_info)
         self.class_ids = np.arange(self.num_classes)
-        self.class_names = [clean_name(c["name"]) for c in self.class_info]
+        self.class_names = [clean_name(self.class_info[c]["name"]) for c in self.class_info]
         self.num_images = len(self.image_info)
         self._image_ids = np.arange(self.num_images)
 
         # Mapping from source class and image IDs to internal IDs
-        self.class_from_source_map = {"{}.{}".format(info['source'], info['id']): id
+        self.class_from_source_map = {"{}.{}".format(self.class_info[info]['source'], self.class_info[info]['id']): id
                                       for info, id in zip(self.class_info, self.class_ids)}
-        self.image_from_source_map = {"{}.{}".format(info['source'], info['id']): id
+        self.image_from_source_map = {"{}.{}".format(self.image_info[info]['source'], info): id
                                       for info, id in zip(self.image_info, self.image_ids)}
 
         # Map sources to class_ids they support
