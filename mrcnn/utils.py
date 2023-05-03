@@ -199,8 +199,8 @@ def box_refinement_graph(box, gt_box):
 
     dy = (gt_center_y - center_y) / height
     dx = (gt_center_x - center_x) / width
-    dh = tf.log(gt_height / height)
-    dw = tf.log(gt_width / width)
+    dh = tf.math.log(gt_height / height)
+    dw = tf.math.log(gt_width / width)
 
     result = tf.stack([dy, dx, dh, dw], axis=1)
     return result
@@ -305,14 +305,14 @@ class Dataset(object):
         # Build (or rebuild) everything else from the info dicts.
         self.num_classes = len(self.class_info)
         self.class_ids = np.arange(self.num_classes)
-        self.class_names = [clean_name(self.class_info[c]["name"]) for c in self.class_info]
+        self.class_names = [clean_name(c["name"]) for c in self.class_info]
         self.num_images = len(self.image_info)
         self._image_ids = np.arange(self.num_images)
 
         # Mapping from source class and image IDs to internal IDs
-        self.class_from_source_map = {"{}.{}".format(self.class_info[info]['source'], self.class_info[info]['id']): id
+        self.class_from_source_map = {"{}.{}".format(info['source'], info['id']): id
                                       for info, id in zip(self.class_info, self.class_ids)}
-        self.image_from_source_map = {"{}.{}".format(self.image_info[info]['source'], info): id
+        self.image_from_source_map = {"{}.{}".format(info['source'], info['id']): id
                                       for info, id in zip(self.image_info, self.image_ids)}
 
         # Map sources to class_ids they support
@@ -492,44 +492,27 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
     return image.astype(image_dtype), window, scale, padding, crop
 
 
-def resize_mask(mask, image, padding, crop=None):
+def resize_mask(mask, scale, padding, crop=None):
     """Resizes a mask using the given scale and padding.
     Typically, you get the scale and padding from resize_image() to
     ensure both, the image and the mask, are resized consistently.
+
     scale: mask scaling factor
     padding: Padding to add to the mask in the form
             [(top, bottom), (left, right), (0, 0)]
     """
-    # define scale from the image size
-
     # Suppress warning from scipy 0.13.0, the output shape of zoom() is
     # calculated with round() instead of int()
-    
-    #get the dimension of the image without padding 
-    # print('padding subtracted')
-    image_h_no_pad = image.shape[0]-sum(padding[0])
-    image_w_no_pad = image.shape[1]-sum(padding[1])
-    
-    # print('no padding subtracted')
-    # image_w_no_pad = image.shape[1]
-    # image_h_no_pad = image.shape[0]
-    
-    #get scale of image without the padding so we could resize the mask 
-    h_scale = float(image_h_no_pad/mask.shape[0])
-    w_scale = float(image_w_no_pad/mask.shape[1])
-    
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        mask = scipy.ndimage.zoom(mask, zoom=[h_scale, w_scale, 1], order=0)
-
+        mask = scipy.ndimage.zoom(mask, zoom=[scale, scale, 1], order=0)
     if crop is not None:
         y, x, h, w = crop
         mask = mask[y:y + h, x:x + w]
-    
-    else:   #add back padding like usual (?)
-        # print('else: np.pad')
+    else:
         mask = np.pad(mask, padding, mode='constant', constant_values=0)
     return mask
+
 
 def minimize_mask(bbox, mask, mini_shape):
     """Resize masks to a smaller version to reduce memory load.
