@@ -50,7 +50,7 @@ def display_images(images, titles=None, cols=4, cmap=None, norm=None,
         plt.subplot(rows, cols, i)
         plt.title(title, fontsize=9)
         plt.axis('off')
-        plt.imshow(image.astype(np.uint8), cmap=cmap,
+        plt.imshow(image, cmap=cmap,
                    norm=norm, interpolation=interpolation)
         i += 1
     plt.show()
@@ -69,11 +69,9 @@ def random_colors(N, bright=True):
     return colors
 
 
-def apply_mask(image, mask, color, alpha=0.5):
+def apply_mask(image, mask, color, alpha=0.1):
     """Apply the given mask to the image.
     """
-    if (image.shape[0]!=mask.shape[0]) or (image.shape[1] != mask.shape[1]):  
-      mask = utils.resize_mask(mask,image,padding=[(0,0),(0,0),(0,0)])
     for c in range(3):
         image[:, :, c] = np.where(mask == 1,
                                   image[:, :, c] *
@@ -101,12 +99,7 @@ def display_instances(image, boxes, masks, class_ids, class_names,
     """
     # Number of instances
     N = boxes.shape[0]
-   
-    
-    if (image.shape[0]!=masks.shape[0]) or (image.shape[1] != masks.shape[1]):
-      masks = utils.resize_mask(masks,image,padding=[(0,0),(0,0),(0,0)])
-      
-
+    N_classes = len(np.unique(class_ids))
     if not N:
         print("\n*** No instances to display *** \n")
     else:
@@ -119,7 +112,9 @@ def display_instances(image, boxes, masks, class_ids, class_names,
         auto_show = True
 
     # Generate random colors
-    colors = colors or random_colors(N)
+    colors = colors
+    if not colors:
+        colors = dict(zip(np.unique(class_ids), random_colors(N_classes)))
 
     # Show area outside image boundaries.
     height, width = image.shape[:2]
@@ -128,9 +123,10 @@ def display_instances(image, boxes, masks, class_ids, class_names,
     ax.axis('off')
     ax.set_title(title)
 
-    masked_image = image.astype(np.uint32).copy()
+    masked_image = image.copy()
     for i in range(N):
-        color = colors[i]
+        class_id = class_ids[i]
+        color = colors[class_id]
 
         # Bounding box
         if not np.any(boxes[i]):
@@ -144,13 +140,13 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             ax.add_patch(p)
 
         # Label
-        if not captions:
-            class_id = class_ids[i]
-            score = scores[i] if scores is not None else None
-            label = class_names[class_id]
-            caption = "{} {:.3f}".format(label, score) if score else label
-        else:
+        
+        score = scores[i] if scores is not None else None
+        label = class_names[class_id]
+        if captions:
             caption = captions[i]
+        else:
+            caption = "{} {:.3f}".format(label, score) if score else label
         ax.text(x1, y1 + 8, caption,
                 color='w', size=11, backgroundcolor="b")
 
@@ -170,7 +166,7 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             verts = np.fliplr(verts) - 1
             p = Polygon(verts, facecolor="none", edgecolor=color)
             ax.add_patch(p)
-    ax.imshow(masked_image.astype(np.uint8))
+    ax.imshow(masked_image)
     if auto_show:
         plt.show()
 
