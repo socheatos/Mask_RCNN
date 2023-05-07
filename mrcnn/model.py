@@ -22,7 +22,10 @@ import tensorflow.keras.utils as KU
 from tensorflow.python.eager import context
 import tensorflow.keras.models as KM
 
-from mrcnn import utils
+try:
+    from mrcnn import utils
+except:
+    from maskrcnn.mrcnn import utils
 
 # Requires TensorFlow 2.0+
 from distutils.version import LooseVersion
@@ -1230,7 +1233,6 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
         defined in MINI_MASK_SHAPE.
     """
     # Load image and mask
-    image = dataset.load_image(image_id)
     mask, class_ids = dataset.load_mask(image_id)
     original_shape = image.shape
     image, window, scale, padding, crop = utils.resize_image(
@@ -2153,8 +2155,8 @@ class MaskRCNN(object):
         metrics. Then calls the Keras compile() function.
         """
         # Optimizer object
-        optimizer = keras.optimizers.SGD(
-            lr=learning_rate, momentum=momentum,
+        optimizer = keras.optimizers.legacy.SGD(
+            learning_rate=learning_rate, momentum=momentum,
             clipnorm=self.config.GRADIENT_CLIP_NORM)
         # Add Losses
         loss_names = [
@@ -2354,6 +2356,18 @@ class MaskRCNN(object):
         else:
             workers = multiprocessing.cpu_count()
 
+        # self.keras_model.fit(
+        #     train_generator,
+        #     initial_epoch=self.epoch,
+        #     epochs=epochs,
+        #     steps_per_epoch=self.config.STEPS_PER_EPOCH,
+        #     callbacks=callbacks,
+        #     validation_data=val_generator,
+        #     validation_steps=self.config.VALIDATION_STEPS,
+        #     max_queue_size=100,
+        #     workers=workers,
+        #     use_multiprocessing=workers > 1,
+        # )
         self.keras_model.fit(
             train_generator,
             initial_epoch=self.epoch,
@@ -2363,8 +2377,8 @@ class MaskRCNN(object):
             validation_data=val_generator,
             validation_steps=self.config.VALIDATION_STEPS,
             max_queue_size=100,
-            workers=workers,
-            use_multiprocessing=workers > 1,
+            workers=1,
+            use_multiprocessing=False,
         )
         self.epoch = max(self.epoch, epochs)
 

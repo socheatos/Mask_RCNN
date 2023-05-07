@@ -25,8 +25,10 @@ ROOT_DIR = os.path.abspath("../../models/maskrcnn")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
-from mrcnn import utils
-
+try:
+    from mrcnn import utils
+except:
+    from maskrcnn.mrcnn import utils
 
 ############################################################
 #  Visualization

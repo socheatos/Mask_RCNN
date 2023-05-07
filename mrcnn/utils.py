@@ -310,8 +310,11 @@ class Dataset(object):
         self._image_ids = np.arange(self.num_images)
 
         # Mapping from source class and image IDs to internal IDs
-        self.class_from_source_map = {"{}.{}".format(info['source'], info['id']): id
-                                      for info, id in zip(self.class_info, self.class_ids)}
+        # self.class_from_source_map = {"{}.{}".format(info['source'], info['id']): id
+        #                               for info, id in zip(self.class_info, self.class_ids)}
+        self.class_from_source_map = {info['id']: name
+                                      for info, name in zip(self.class_info, self.class_names)}
+        
         self.image_from_source_map = {"{}.{}".format(info['source'], info['id']): id
                                       for info, id in zip(self.image_info, self.image_ids)}
 
@@ -355,8 +358,10 @@ class Dataset(object):
     def load_image(self, image_id):
         """Load the specified image and return a [H,W,3] Numpy array.
         """
+        # image_id = list(self.image_info.keys())[image_id]
         # Load image
         image = skimage.io.imread(self.image_info[image_id]['path'])
+
         # If grayscale. Convert to RGB for consistency.
         if image.ndim != 3:
             image = skimage.color.gray2rgb(image)
@@ -893,6 +898,8 @@ def resize(image, output_shape, order=1, mode='constant', cval=0, clip=True,
     of skimage. This solves the problem by using different parameters per
     version. And it provides a central place to control resizing defaults.
     """
+    if image.dtype == 'bool':
+        order=0
     if LooseVersion(skimage.__version__) >= LooseVersion("0.14"):
         # New in 0.14: anti_aliasing. Default it to False for backward
         # compatibility with skimage 0.13.
