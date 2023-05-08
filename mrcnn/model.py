@@ -25,7 +25,8 @@ import tensorflow.keras.models as KM
 try:
     from mrcnn import utils
 except:
-    from maskrcnn.mrcnn import utils
+    # for loading in colab
+    from Mask_RCNN.mrcnn import utils
 
 # Requires TensorFlow 2.0+
 from distutils.version import LooseVersion

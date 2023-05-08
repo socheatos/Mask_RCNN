@@ -28,7 +28,8 @@ sys.path.append(ROOT_DIR)  # To find local version of the library
 try:
     from mrcnn import utils
 except:
-    from maskrcnn.mrcnn import utils
+    # for loading in colab
+    from Mask_RCNN.mrcnn import utils
 
 ############################################################
 #  Visualization
