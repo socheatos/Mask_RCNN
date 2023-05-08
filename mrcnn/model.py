@@ -1234,13 +1234,14 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
     """
     # Load image and mask
     mask, class_ids = dataset.load_mask(image_id)
+    image = dataset.load_image(image_id)
     original_shape = image.shape
     image, window, scale, padding, crop = utils.resize_image(
         image,
         min_dim=config.IMAGE_MIN_DIM,
         min_scale=config.IMAGE_MIN_SCALE,
         max_dim=config.IMAGE_MAX_DIM,
-        mode=config.IMAGE_RESIZE_MODE)
+        mode=config.IMAGE_RESIZE_MODE) 
     mask = utils.resize_mask(mask, scale, padding, crop)
 
     # Augmentation
@@ -1272,7 +1273,7 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
         assert image.shape == image_shape, "Augmentation shouldn't change image size"
         assert mask.shape == mask_shape, "Augmentation shouldn't change mask size"
         # Change mask back to bool
-        mask = mask.astype(np.bool)
+        mask = mask.astype(bool)
 
     # Note that some boxes might be all zeros if the corresponding mask got cropped out.
     # and here is to filter them out
