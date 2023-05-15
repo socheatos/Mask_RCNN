@@ -504,7 +504,7 @@ def overlaps_graph(boxes1, boxes2):
     return overlaps
 
 
-def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config):
+def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, gt_obs_ids, config):
     """Generates detection targets for one image. Subsamples proposals and
     generates target class IDs, bounding box deltas, and masks for each.
 
@@ -538,6 +538,9 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     gt_boxes, non_zeros = trim_zeros_graph(gt_boxes, name="trim_gt_boxes")
     gt_class_ids = tf.boolean_mask(tensor=gt_class_ids, mask=non_zeros,
                                    name="trim_gt_class_ids")
+    gt_obs_ids = tf.boolean_mask(tensor=gt_obs_ids, mask=non_zeros,
+                                   name="trim_gt_obs_ids")
+    
     gt_masks = tf.gather(gt_masks, tf.compat.v1.where(non_zeros)[:, 0], axis=2,
                          name="trim_gt_masks")
 
@@ -548,6 +551,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     non_crowd_ix = tf.compat.v1.where(gt_class_ids > 0)[:, 0]
     crowd_boxes = tf.gather(gt_boxes, crowd_ix)
     gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)
+    # gt_obs_ids = tf.gather(gt_obs_ids, non_crowd_ix)
     gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
     gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
 
@@ -590,6 +594,8 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     )
     roi_gt_boxes = tf.gather(gt_boxes, roi_gt_box_assignment)
     roi_gt_class_ids = tf.gather(gt_class_ids, roi_gt_box_assignment)
+    roi_obs_class_ids = tf.gather(gt_obs_ids, roi_gt_box_assignment)
+    
 
     # Compute bbox refinement for positive ROIs
     deltas = utils.box_refinement_graph(positive_rois, roi_gt_boxes)
@@ -634,10 +640,11 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     rois = tf.pad(tensor=rois, paddings=[(0, P), (0, 0)])
     roi_gt_boxes = tf.pad(tensor=roi_gt_boxes, paddings=[(0, N + P), (0, 0)])
     roi_gt_class_ids = tf.pad(tensor=roi_gt_class_ids, paddings=[(0, N + P)])
+    roi_obs_class_ids = tf.pad(tensor=roi_obs_class_ids, paddings=[(0, N + P)])
     deltas = tf.pad(tensor=deltas, paddings=[(0, N + P), (0, 0)])
     masks = tf.pad(tensor=masks, paddings=[[0, N + P], (0, 0), (0, 0)])
 
-    return rois, roi_gt_class_ids, deltas, masks
+    return rois, roi_gt_class_ids, roi_obs_class_ids, deltas, masks 
 
 
 class DetectionTargetLayer(KL.Layer):
@@ -651,6 +658,7 @@ class DetectionTargetLayer(KL.Layer):
     gt_boxes: [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in normalized
               coordinates.
     gt_masks: [batch, height, width, MAX_GT_INSTANCES] of boolean type
+    gt_obs_ids: [batch, 2]
 
     Returns: Target ROIs and corresponding class IDs, bounding box shifts,
     and masks.
@@ -679,14 +687,15 @@ class DetectionTargetLayer(KL.Layer):
         gt_class_ids = inputs[1]
         gt_boxes = inputs[2]
         gt_masks = inputs[3]
+        gt_obs_ids = inputs[4]
 
         # Slice the batch and run a graph for each slice
         # TODO: Rename target_bbox to target_deltas for clarity
-        names = ["rois", "target_class_ids", "target_bbox", "target_mask"]
+        names = ["rois", "target_class_ids", "target_bbox", "target_mask","obstruction_ids"]
         outputs = utils.batch_slice(
-            [proposals, gt_class_ids, gt_boxes, gt_masks],
-            lambda w, x, y, z: detection_targets_graph(
-                w, x, y, z, self.config),
+            [proposals, gt_class_ids, gt_boxes, gt_masks, gt_obs_ids],
+            lambda v,w, x, y, z: detection_targets_graph(
+                v,w, x, y, z, self.config),
             self.config.IMAGES_PER_GPU, names=names)
         return outputs
 
@@ -966,12 +975,20 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
 
     shared = KL.Lambda(lambda x: K.squeeze(K.squeeze(x, 3), 2),
                        name="pool_squeeze")(x)
-
+    
+    ### HERE ALTER FOR CLASSIFIER HEAD ###
     # Classifier head
     mrcnn_class_logits = KL.TimeDistributed(KL.Dense(num_classes),
                                             name='mrcnn_class_logits')(shared)
     mrcnn_probs = KL.TimeDistributed(KL.Activation("softmax"),
                                      name="mrcnn_class")(mrcnn_class_logits)
+    
+    # Obstruction classifer head
+    # check first what the input looks like?
+    obstruction_class_logits = KL.TimeDistributed(KL.Dense(num_classes),
+                                                    name = 'obstruction_class_logits')(mrcnn_class_logits)
+    obstruction_probs = KL.TimeDistributed(KL.Activation("sigmoid"),
+                                     name="obstruction_probs")(obstruction_class_logits)
 
     # BBox head
     # [batch, num_rois, NUM_CLASSES * (dy, dx, log(dh), log(dw))]
@@ -984,7 +1001,7 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
     else:
         mrcnn_bbox = KL.Reshape((s[1], num_classes, 4), name="mrcnn_bbox")(x)
 
-    return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
+    return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox, obstruction_class_logits, obstruction_probs
 
 
 def build_fpn_mask_graph(rois, feature_maps, image_meta,
@@ -1130,9 +1147,9 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
     pred_active = tf.gather(active_class_ids[0], pred_class_ids)
 
     # Loss
+    # class
     loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=target_class_ids, logits=pred_class_logits)
-
     # Erase losses of predictions of classes that are not in the active
     # classes of the image.
     loss = loss * pred_active
@@ -1142,6 +1159,14 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
     loss = tf.reduce_sum(input_tensor=loss) / tf.reduce_sum(input_tensor=pred_active)
     return loss
 
+def mrcnn_obstruction_loss_graph(target_class_ids, pred_class_logits):
+    target_class_ids = tf.cast(target_class_ids, 'int64')
+
+    loss = tf.nn.sigmoid_cross_entropy_with_logits(labels= target_class_ids,
+                                                   logits=pred_class_logits)
+    
+    return loss
+    
 
 def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
     """Loss for Mask R-CNN bounding box refinement.
@@ -1868,6 +1893,11 @@ class MaskRCNN(object):
             # 1. GT Class IDs (zero padded)
             input_gt_class_ids = KL.Input(
                 shape=[None], name="input_gt_class_ids", dtype=tf.int32)
+            
+            # 1.5 GT Label IDS for obstructions
+            input_gt_obs_ids = KL.Input(
+                shape=[None], name="input_gt_obs_ids", dtype=tf.int32)
+            
             # 2. GT Boxes in pixels (zero padded)
             # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
             input_gt_boxes = KL.Input(
@@ -1995,13 +2025,13 @@ class MaskRCNN(object):
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
-            rois, target_class_ids, target_bbox, target_mask =\
+            rois, target_class_ids, target_obs_ids, target_bbox, target_mask =\
                 DetectionTargetLayer(config, name="proposal_targets")([
-                    target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+                    target_rois, input_gt_class_ids, gt_boxes, input_gt_masks,input_gt_obs_ids])
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
-            mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
+            mrcnn_class_logits, mrcnn_class, mrcnn_bbox,obstruction_class_logits, obstruction_probs =\
                 fpn_classifier_graph(rois, mrcnn_feature_maps, input_image_meta,
                                      config.POOL_SIZE, config.NUM_CLASSES,
                                      train_bn=config.TRAIN_BN,
@@ -2017,6 +2047,7 @@ class MaskRCNN(object):
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
 
             # Losses
+            # maybe we can check if the model is multilabel first
             rpn_class_loss = KL.Lambda(lambda x: rpn_class_loss_graph(*x), name="rpn_class_loss")(
                 [input_rpn_match, rpn_class_logits])
             rpn_bbox_loss = KL.Lambda(lambda x: rpn_bbox_loss_graph(config, *x), name="rpn_bbox_loss")(
@@ -2028,20 +2059,23 @@ class MaskRCNN(object):
             mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
                 [target_mask, target_class_ids, mrcnn_mask])
 
+            # loss for mrcnn obstruction classifer 
+            obs_class_loss = KL.Lambda(lambda x: mrcnn_obstruction_loss_graph(*x), name = 'mrcnn_class_obstruction_loss')([target_obs_ids,obstruction_class_logits])
+
             # Model
             inputs = [input_image, input_image_meta,
-                      input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, input_gt_masks]
+                      input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, input_gt_masks,input_gt_obs_ids]
             if not config.USE_RPN_ROIS:
                 inputs.append(input_rois)
             outputs = [rpn_class_logits, rpn_class, rpn_bbox,
                        mrcnn_class_logits, mrcnn_class, mrcnn_bbox, mrcnn_mask,
                        rpn_rois, output_rois,
-                       rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
+                       rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, obs_class_loss]
             model = KM.Model(inputs, outputs, name='mask_rcnn')
         else:
             # Network Heads
             # Proposal classifier and BBox regressor heads
-            mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
+            mrcnn_class_logits, mrcnn_class, mrcnn_bbox, obstruction_class_logits, obstruction_probs=\
                 fpn_classifier_graph(rpn_rois, mrcnn_feature_maps, input_image_meta,
                                      config.POOL_SIZE, config.NUM_CLASSES,
                                      train_bn=config.TRAIN_BN,
