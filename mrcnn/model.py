@@ -980,7 +980,7 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
     # Classifier head
     mrcnn_class_logits = KL.TimeDistributed(KL.Dense(num_classes),
                                             name='mrcnn_class_logits')(shared)
-    mrcnn_probs = KL.TimeDistributed(KL.Activation("softmax"),
+    mrcnn_probs = KL.TimeDistributed(KL.Activation("sigmoid"),
                                      name="mrcnn_class")(mrcnn_class_logits)
     
     # Obstruction classifer head
@@ -1162,16 +1162,9 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
     return loss
 
 def mrcnn_obstruction_loss_graph(target_class_ids, pred_class_logits):
-    target_class_ids = tf.cast(target_class_ids, 'int64')
-    pred_class_logits = tf.squeeze(pred_class_logits)
     target_class_ids = tf.cast(target_class_ids, 'float32')
-    loss = tf.nn.sigmoid_cross_entropy_with_logits(labels= target_class_ids,
-                                                   logits=pred_class_logits)
-    # loss = tf.nn.softmax_cross_entropy_with_logits(labels= target_class_ids,
-                                                #    logits=pred_class_logits)
-    loss = tf.reduce_sum(input_tensor = loss)/ tf.reduce_sum(input_tensor=target_class_ids)
-    
-    
+    name = 'obstruction_loss_fc'
+    loss = -tf.reduce_sum(target_class_ids*(tf.math.log_sigmoid(tf.squeeze(pred_class_logits))+1e-6))
     return loss
     
 
