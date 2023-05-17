@@ -21,7 +21,12 @@ import tensorflow.keras.layers as KL
 import tensorflow.keras.utils as KU
 from tensorflow.python.eager import context
 import tensorflow.keras.models as KM
-
+# import tensorflow as tf
+# tf.keras.backend.clear_session()
+from tensorflow.compat.v1 import InteractiveSession
+config = tf.compat.v1.ConfigProto()
+config.gpu_options.allow_growth=True
+sess = tf.compat.v1.Session(config=config)
 try:
     from mrcnn import utils
 except:
@@ -53,6 +58,9 @@ def log(text, array=None):
         text += "  {}".format(array.dtype)
     print(text)
 
+def log_print(name, tensor):
+    print(name, "   shape:", tensor.shape, "   type:", tensor.dtype, 
+          "   min:", tf.math.reduce_min(tensor), "   max:", tf.math.reduce_max(tensor))
 
 class BatchNorm(KL.BatchNormalization):
     """Extends the Keras BatchNormalization class to allow a central place
@@ -1260,6 +1268,7 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
     """
     # Load image and mask
     mask, class_ids, obs_ids = dataset.load_mask(image_id)
+    
     image = dataset.load_image(image_id)
     original_shape = image.shape
     image, window, scale, padding, crop = utils.resize_image(
@@ -2575,20 +2584,21 @@ class MaskRCNN(object):
             log("image_metas", image_metas)
             log("anchors", anchors)
         # Run object detection
-        detections, _, _, mrcnn_mask, _, _, _ =\
+        detections, _, _, mrcnn_mask, _, _, _, obs =\
             self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
         # Process detections
         results = []
         for i, image in enumerate(images):
-            final_rois, final_class_ids, final_scores, final_masks =\
+            final_rois, final_class_ids, final_scores, final_masks, final_obs =\
                 self.unmold_detections(detections[i], mrcnn_mask[i],
                                        image.shape, molded_images[i].shape,
-                                       windows[i])
+                                       windows[i], obs[i])
             results.append({
                 "rois": final_rois,
                 "class_ids": final_class_ids,
                 "scores": final_scores,
                 "masks": final_masks,
+                "obstructions": final_obs
             })
         return results
 
