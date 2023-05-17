@@ -988,7 +988,7 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
     # Classifier head
     mrcnn_class_logits = KL.TimeDistributed(KL.Dense(num_classes),
                                             name='mrcnn_class_logits')(shared)
-    mrcnn_probs = KL.TimeDistributed(KL.Activation("sigmoid"),
+    mrcnn_probs = KL.TimeDistributed(KL.Activation("softmax"),
                                      name="mrcnn_class")(mrcnn_class_logits)
     
     # Obstruction classifer head
@@ -1169,10 +1169,17 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
     loss = tf.reduce_sum(input_tensor=loss) / tf.reduce_sum(input_tensor=pred_active)
     return loss
 
-def mrcnn_obstruction_loss_graph(target_class_ids, pred_class_logits):
+def mrcnn_obstruction_loss_graph(target_class_ids, pred_class_logits, weights = 1.81207664):
+    '''labels * -log(sigmoid(logits)) * pos_weight +
+    (1 - labels) * -log(1 - sigmoid(logits))'''
+    
+    # pos_weights obtained from sklearn.util.class_weights.compute_class_weights()
+
     target_class_ids = tf.cast(target_class_ids, 'float32')
-    name = 'obstruction_loss_fc'
-    loss = -tf.reduce_sum(target_class_ids*(tf.math.log_sigmoid(tf.squeeze(pred_class_logits))+1e-6))
+    pred_logits = tf.squeeze(pred_class_logits)
+    loss = tf.nn.weighted_cross_entropy_with_logits(target_class_ids, pred_logits,pos_weight = weights)
+    loss = tf.reduce_sum(loss)
+
     return loss
     
 
@@ -2049,7 +2056,6 @@ class MaskRCNN(object):
             rois, target_class_ids, target_bbox, target_mask,target_obs_ids =\
                 DetectionTargetLayer(config, name="proposal_targets")([
                     target_rois, input_gt_class_ids, gt_boxes, input_gt_masks,input_gt_obs_ids])
-
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox,obstruction_class_logits, obstruction_probs =\
@@ -2479,7 +2485,7 @@ class MaskRCNN(object):
         return molded_images, image_metas, windows
 
     def unmold_detections(self, detections, mrcnn_mask, original_image_shape,
-                          image_shape, window):
+                          image_shape, window, obs):
         """Reformats the detections of one image from the format of the neural
         network output to a format suitable for use in the rest of the
         application.
@@ -2507,6 +2513,7 @@ class MaskRCNN(object):
         class_ids = detections[:N, 4].astype(np.int32)
         scores = detections[:N, 5]
         masks = mrcnn_mask[np.arange(N), :, :, class_ids]
+        obs_ids = obs[:N].reshape((N,))    
 
         # Translate normalized coordinates in the resized image to pixel
         # coordinates in the original image before resizing
@@ -2530,6 +2537,7 @@ class MaskRCNN(object):
             class_ids = np.delete(class_ids, exclude_ix, axis=0)
             scores = np.delete(scores, exclude_ix, axis=0)
             masks = np.delete(masks, exclude_ix, axis=0)
+            obs_ids = np.delete(obs_ids,exclude_ix)
             N = class_ids.shape[0]
 
         # Resize masks to original image size and set boundary threshold.
@@ -2541,7 +2549,7 @@ class MaskRCNN(object):
         full_masks = np.stack(full_masks, axis=-1)\
             if full_masks else np.empty(original_image_shape[:2] + (0,))
 
-        return boxes, class_ids, scores, full_masks
+        return boxes, class_ids, scores, full_masks, obs_ids
 
     def detect(self, images, verbose=0):
         """Runs the detection pipeline.
