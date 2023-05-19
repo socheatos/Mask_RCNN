@@ -995,10 +995,17 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
     # check first what the input looks like?
     # input is (B,-1,NUM_CLASSES)
     # output should be (B,-1*NUMCLASS)
+    obstruction_class_logits = KL.TimeDistributed(KL.Dense(11),
+                                                    name = 'mrcnn_obs_logits_1')(mrcnn_class_logits)
+    obstruction_class_logits = KL.TimeDistributed(KL.Activation('relu'))(obstruction_class_logits)
+    obstruction_class_logits = KL.TimeDistributed(KL.Dense(11),
+                                                    name = 'mrcnn_obs_logits_2')(obstruction_class_logits)
+    obstruction_class_logits = KL.TimeDistributed(KL.Activation('relu'))(obstruction_class_logits)
     obstruction_class_logits = KL.TimeDistributed(KL.Dense(1),
-                                                    name = 'mrcnn_obs_logits')(mrcnn_class_logits)
+                                                    name = 'mrcnn_obs_logits_3')(obstruction_class_logits)
     obstruction_probs = KL.TimeDistributed(KL.Activation("sigmoid"),
                                      name="mrcnn_obs_class")(obstruction_class_logits)
+
 
     # BBox head
     # [batch, num_rois, NUM_CLASSES * (dy, dx, log(dh), log(dw))]
@@ -1177,8 +1184,9 @@ def mrcnn_obstruction_loss_graph(target_class_ids, pred_class_logits, weights = 
 
     target_class_ids = tf.cast(target_class_ids, 'float32')
     pred_logits = tf.squeeze(pred_class_logits)
-    loss = tf.nn.weighted_cross_entropy_with_logits(target_class_ids, pred_logits,pos_weight = weights)
+    loss = tf.nn.weighted_cross_entropy_with_logits(target_class_ids, pred_logits,pos_weight = weights)*.001
     loss = tf.reduce_sum(loss)
+    # coefficient added so that the losses are within the same magnitude (?)
 
     return loss
     
