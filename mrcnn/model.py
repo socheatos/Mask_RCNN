@@ -995,10 +995,27 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
     # check first what the input looks like?
     # input is (B,-1,NUM_CLASSES)
     # output should be (B,-1*NUMCLASS)
-    obstruction_class_logits = KL.TimeDistributed(KL.Dense(1),
-                                                    name = 'mrcnn_obs_logits')(mrcnn_class_logits)
+    obstruction_class_logits = KL.TimeDistributed(KL.Dense(2),
+                                                    name = 'mrcnn_obs_logits_1')(shared)
+    
+    
+    # obstruction_class_logits = KL.TimeDistributed(KL.Dense(64),
+    #                                                 name = 'mrcnn_obs_logits_1')(shared)
+    # obstruction_probs = KL.TimeDistributed(KL.Activation("relu"))(obstruction_class_logits)
+
+    # obstruction_class_logits = KL.TimeDistributed(KL.Dense(32),
+    #                                                 name = 'mrcnn_obs_logits_2')(obstruction_class_logits)
+    # obstruction_probs = KL.TimeDistributed(KL.Activation("relu"))(obstruction_class_logits)
+
+    # obstruction_class_logits = KL.TimeDistributed(KL.Dense(16),
+    #                                                 name = 'mrcnn_obs_logits_3')(obstruction_class_logits)
+    # obstruction_probs = KL.TimeDistributed(KL.Activation("relu"))(obstruction_class_logits)
+
+    # obstruction_class_logits = KL.TimeDistributed(KL.Dense(1),
+    #                                                 name = 'mrcnn_obs_logits_4')(obstruction_class_logits)
     obstruction_probs = KL.TimeDistributed(KL.Activation("sigmoid"),
                                      name="mrcnn_obs_class")(obstruction_class_logits)
+
 
     # BBox head
     # [batch, num_rois, NUM_CLASSES * (dy, dx, log(dh), log(dw))]
@@ -1174,11 +1191,12 @@ def mrcnn_obstruction_loss_graph(target_class_ids, pred_class_logits, weights = 
     (1 - labels) * -log(1 - sigmoid(logits))'''
     
     # pos_weights obtained from sklearn.util.class_weights.compute_class_weights()
+    
 
     target_class_ids = tf.cast(target_class_ids, 'float32')
-    pred_logits = tf.squeeze(pred_class_logits)
-    loss = tf.nn.weighted_cross_entropy_with_logits(target_class_ids, pred_logits,pos_weight = weights)
-    loss = tf.reduce_sum(loss)
+    pred_logits = tf.reduce_max(pred_class_logits,axis=-1)
+    loss = tf.nn.sigmoid_cross_entropy_with_logits(target_class_ids, pred_logits)
+    loss = tf.reduce_mean(loss)
 
     return loss
     
@@ -1338,6 +1356,8 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
     source_class_ids = dataset.source_class_ids[dataset.image_info[image_id]["source"]]
     active_class_ids[source_class_ids] = 1
 
+    
+
     # Resize masks to smaller size to reduce memory usage
     if config.USE_MINI_MASK:
         mask = utils.minimize_mask(bbox, mask, config.MINI_MASK_SHAPE)
@@ -1349,7 +1369,7 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
     return image, image_meta, class_ids, bbox, mask, obs_ids
 
 
-def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
+def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, gt_obs_ids, config):
     """Generate targets for training Stage 2 classifier and mask heads.
     This is not used in normal training. It's useful for debugging or to train
     the Mask RCNN heads without using the RPN head.
@@ -1384,6 +1404,7 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
     instance_ids = np.where(gt_class_ids > 0)[0]
     assert instance_ids.shape[0] > 0, "Image must contain instances."
     gt_class_ids = gt_class_ids[instance_ids]
+    gt_obs_ids = gt_obs_ids[instance_ids]
     gt_boxes = gt_boxes[instance_ids]
     gt_masks = gt_masks[:, :, instance_ids]
 
@@ -1407,6 +1428,7 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
     # GT box assigned to each ROI
     rpn_roi_gt_boxes = gt_boxes[rpn_roi_iou_argmax]
     rpn_roi_gt_class_ids = gt_class_ids[rpn_roi_iou_argmax]
+    rpn_roi_gt_obs_ids = gt_obs_ids[rpn_roi_iou_argmax]
 
     # Positive ROIs are those with >= 0.5 IoU with a GT box.
     fg_ids = np.where(rpn_roi_iou_max > 0.5)[0]
@@ -1458,11 +1480,13 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
     # Reset the gt boxes assigned to BG ROIs.
     rpn_roi_gt_boxes[keep_bg_ids, :] = 0
     rpn_roi_gt_class_ids[keep_bg_ids] = 0
+    rpn_roi_gt_obs_ids[keep_bg_ids] = 0
 
     # For each kept ROI, assign a class_id, and for FG ROIs also add bbox refinement.
     rois = rpn_rois[keep]
     roi_gt_boxes = rpn_roi_gt_boxes[keep]
     roi_gt_class_ids = rpn_roi_gt_class_ids[keep]
+    roi_gt_obs_ids = rpn_roi_gt_obs_ids[keep]
     roi_gt_assignment = rpn_roi_iou_argmax[keep]
 
     # Class-aware bbox deltas. [y, x, log(h), log(w)]
@@ -1479,6 +1503,7 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
                      dtype=np.float32)
     for i in pos_ids:
         class_id = roi_gt_class_ids[i]
+        obs_id = roi_gt_obs_ids[i]
         assert class_id > 0, "class id must be greater than 0"
         gt_id = roi_gt_assignment[i]
         class_mask = gt_masks[:, :, gt_id]
@@ -1502,7 +1527,7 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
         mask = utils.resize(m, config.MASK_SHAPE)
         masks[i, :, :, class_id] = mask
 
-    return rois, roi_gt_class_ids, bboxes, masks
+    return rois, roi_gt_class_ids, roi_gt_obs_ids, bboxes, masks
 
 
 def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
@@ -1783,9 +1808,9 @@ class DataGenerator(KU.Sequence):
                 rpn_rois = generate_random_rois(
                     image.shape, self.random_rois, gt_class_ids, gt_boxes)
                 if self.detection_targets:
-                    rois, mrcnn_class_ids, mrcnn_bbox, mrcnn_mask = \
+                    rois, mrcnn_class_ids, mrcnn_obs_ids, mrcnn_bbox, mrcnn_mask = \
                         build_detection_targets(
-                            rpn_rois, gt_class_ids, gt_boxes, gt_masks, self.config)
+                            rpn_rois, gt_class_ids, gt_boxes, gt_masks,gt_obs_ids, self.config)
 
             # Init batch arrays
             if b == 0:
@@ -1820,7 +1845,7 @@ class DataGenerator(KU.Sequence):
                         batch_mrcnn_mask = np.zeros(
                             (self.batch_size,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
                         batch_gt_obs_ids = np.zeros(
-                            (self.batch_size, )+mrcnn_class_ids.shape, dtype=mrcnn_class_ids.dtype)
+                            (self.batch_size, )+mrcnn_obs_ids.shape, dtype=mrcnn_obs_ids.dtype)
 
             # If more instances than fits in the array, sub-sample from them.
             if gt_boxes.shape[0] > self.config.MAX_GT_INSTANCES:
@@ -1848,7 +1873,7 @@ class DataGenerator(KU.Sequence):
                     batch_mrcnn_class_ids[b] = mrcnn_class_ids
                     batch_mrcnn_bbox[b] = mrcnn_bbox
                     batch_mrcnn_mask[b] = mrcnn_mask
-                    batch_gt_obs_ids[b] = mrcnn_class_ids
+                    batch_gt_obs_ids[b] = mrcnn_obs_ids
             b += 1
 
         inputs = [batch_images, batch_image_meta, batch_rpn_match, batch_rpn_bbox,
@@ -2513,7 +2538,8 @@ class MaskRCNN(object):
         class_ids = detections[:N, 4].astype(np.int32)
         scores = detections[:N, 5]
         masks = mrcnn_mask[np.arange(N), :, :, class_ids]
-        obs_ids = obs[:N].reshape((N,))    
+        obs_ids = np.argmax(obs[:N],axis=-1)  
+        obs_scores = np.max(obs[:N],axis=-1) 
 
         # Translate normalized coordinates in the resized image to pixel
         # coordinates in the original image before resizing
@@ -2538,6 +2564,7 @@ class MaskRCNN(object):
             scores = np.delete(scores, exclude_ix, axis=0)
             masks = np.delete(masks, exclude_ix, axis=0)
             obs_ids = np.delete(obs_ids,exclude_ix)
+            obs_scores = np.delete(obs_scores,exclude_ix)
             N = class_ids.shape[0]
 
         # Resize masks to original image size and set boundary threshold.
@@ -2549,7 +2576,7 @@ class MaskRCNN(object):
         full_masks = np.stack(full_masks, axis=-1)\
             if full_masks else np.empty(original_image_shape[:2] + (0,))
 
-        return boxes, class_ids, scores, full_masks, obs_ids
+        return boxes, class_ids, scores, full_masks, obs_ids, obs_scores
 
     def detect(self, images, verbose=0):
         """Runs the detection pipeline.
@@ -2597,7 +2624,7 @@ class MaskRCNN(object):
         # Process detections
         results = []
         for i, image in enumerate(images):
-            final_rois, final_class_ids, final_scores, final_masks, final_obs =\
+            final_rois, final_class_ids, final_scores, final_masks, final_obs_ids, final_obs_scores =\
                 self.unmold_detections(detections[i], mrcnn_mask[i],
                                        image.shape, molded_images[i].shape,
                                        windows[i], obs[i])
@@ -2606,7 +2633,8 @@ class MaskRCNN(object):
                 "class_ids": final_class_ids,
                 "scores": final_scores,
                 "masks": final_masks,
-                "obstructions": final_obs
+                "obstructions_ids": final_obs_ids,
+                "obstructions_scores": final_obs_scores,
             })
         return results
 
