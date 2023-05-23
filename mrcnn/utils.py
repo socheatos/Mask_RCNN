@@ -7,6 +7,105 @@ Licensed under the MIT License (see LICENSE for details)
 Written by Waleed Abdulla
 """
 
+import logging
+import random
+import numpy as np
+import tensorflow as tf
+import scipy
+import skimage.color
+import skimage.io
+import skimage.transform
+import urllib.request
+import shutil
+import warnings
+from distutils.version import LooseVersion
+
+# URL from which to download the latest COCO trained weights
+COCO_MODEL_URL = "https://github.com/matterport/Mask_RCNN/releases/download/v2.0/mask_rcnn_coco.h5"
+
+
+############################################################
+#  Bounding Boxes
+############################################################
+
+def extract_bboxes(mask):
+    """Compute bounding boxes from masks.
+    mask: [height, width, num_instances]. Mask pixels are either 1 or 0.
+
+    Returns: bbox array [num_instances, (y1, x1, y2, x2)].
+    """
+    boxes = np.zeros([mask.shape[-1], 4], dtype=np.int32)
+    for i in range(mask.shape[-1]):
+        m = mask[:, :, i]
+        # Bounding box.
+        horizontal_indicies = np.where(np.any(m, axis=0))[0]
+        vertical_indicies = np.where(np.any(m, axis=1))[0]
+        if horizontal_indicies.shape[0]:
+            x1, x2 = horizontal_indicies[[0, -1]]
+            y1, y2 = vertical_indicies[[0, -1]]
+            # x2 and y2 should not be part of the box. Increment by 1.
+            x2 += 1
+            y2 += 1
+        else:
+            # No mask for this instance. Might happen due to
+            # resizing or cropping. Set bbox to zeros
+            x1, x2, y1, y2 = 0, 0, 0, 0
+        boxes[i] = np.array([y1, x1, y2, x2])
+    return boxes.astype(np.int32)
+
+
+def compute_iou(box, boxes, box_area, boxes_area, return_intersection=False):
+    """Calculates IoU of the given box with the array of the given boxes.
+    box: 1D vector [y1, x1, y2, x2]
+    boxes: [boxes_count, (y1, x1, y2, x2)]
+    box_area: float. the area of 'box'
+    boxes_area: array of length boxes_count.
+
+    Note: the areas are passed in rather than calculated here for
+    efficiency. Calculate once in the caller to avoid duplicate work.
+    """
+    # Calculate intersection areas
+    y1 = np.maximum(box[0], boxes[:, 0])
+    y2 = np.minimum(box[2], boxes[:, 2])
+    x1 = np.maximum(box[1], boxes[:, 1])
+    x2 = np.minimum(box[3], boxes[:, 3])
+    intersection = np.maximum(x2 - x1, 0) * np.maximum(y2 - y1, 0)
+    union = box_area + boxes_area[:] - intersection[:]
+    iou = intersection / union
+    if return_intersection:
+        return intersection
+    return iou
+
+
+def compute_overlaps(boxes1, boxes2):
+    """Computes IoU overlaps between two sets of boxes.
+    boxes1, boxes2: [N, (y1, x1, y2, x2)].
+
+    For better performance, pass the largest set first and the smaller second.
+    """
+    # Areas of anchors and GT boxes
+    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
+    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
+
+    # Compute overlaps to generate matrix [boxes1 count, boxes2 count]
+    # Each cell contains the IoU value.
+    overlaps = np.zeros((boxes1.shape[0], boxes2.shape[0]))
+    
+    for i in range(overlaps.shape[1]):
+        box2 = boxes2[i]
+        overlaps[:, i] = compute_iou(box2, boxes1, area2[i], area1)
+    return overlaps
+
+
+"""
+Mask R-CNN
+Common utility functions and classes.
+
+Copyright (c) 2017 Matterport, Inc.
+Licensed under the MIT License (see LICENSE for details)
+Written by Waleed Abdulla
+"""
+
 import sys
 import os
 import logging
@@ -97,7 +196,7 @@ def compute_overlaps(boxes1, boxes2):
     return overlaps
 
 
-def compute_overlaps_masks(masks1, masks2):
+def compute_overlaps_masks(masks1, masks2, DICE=False):
     """Computes IoU overlaps between two sets of masks.
     masks1, masks2: [Height, Width, instances]
     """
@@ -115,7 +214,8 @@ def compute_overlaps_masks(masks1, masks2):
     intersections = np.dot(masks1.T, masks2)
     union = area1[:, None] + area2[None, :] - intersections
     overlaps = intersections / union
-
+    if DICE:
+        return overlaps, intersections, area1,area2
     return overlaps
 
 
@@ -736,7 +836,10 @@ def compute_ap(gt_boxes, gt_class_ids, gt_masks,
 
     # Compute precision and recall at each prediction box step
     precisions = np.cumsum(pred_match > -1) / (np.arange(len(pred_match)) + 1)
-    recalls = np.cumsum(pred_match > -1).astype(np.float32) / len(gt_match)
+    if len(gt_match) == 0:
+        recalls = 0
+    else:
+        recalls = np.cumsum(pred_match > -1).astype(np.float32) / len(gt_match)
 
     # Pad with start and end values to simplify the math
     precisions = np.concatenate([[0], precisions, [0]])
@@ -913,3 +1016,18 @@ def resize(image, output_shape, order=1, mode='constant', cval=0, clip=True,
             image, output_shape,
             order=order, mode=mode, cval=cval, clip=clip,
             preserve_range=preserve_range)
+    
+from sklearn import metrics
+def compute_ar(pred_boxes, gt_boxes, list_iou_thresholds):
+    AR = []
+    for iou_threshold in list_iou_thresholds:
+        try:
+            recall, _ = compute_recall(pred_boxes, gt_boxes, iou=iou_threshold)
+            AR.append(recall)
+        except:
+          AR.append(0.0)
+          pass
+
+    AUC = 2 * (metrics.auc(list_iou_thresholds, AR))
+    return AUC
+
